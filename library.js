@@ -51,6 +51,7 @@ var TemplateFactory = (function () {
         "Known Facts Limit: 12",
         "Fallback Type: generic",
         "Announce Help On First Use: true",
+        "Generate Names With AI: true",
         "",
         "# Per-field hints override the built-in brevity rules.",
         "# Format:  Hint <Field Label>: <hint text>",
@@ -189,6 +190,7 @@ var TemplateFactory = (function () {
             knownFactsLimit: 12,
             fallbackType: "generic",
             announceHelpOnFirstUse: true,
+            generateNamesWithAI: true,
             hintOverrides: {}
         };
     }
@@ -214,6 +216,7 @@ var TemplateFactory = (function () {
             else if (k === "fallback type")         cfg.fallbackType = clean(v) || "generic";
             else if (k === "announce help on first use")
                                                     cfg.announceHelpOnFirstUse = parseBool(v, true);
+            else if (k === "generate names with ai") cfg.generateNamesWithAI = parseBool(v, true);
             else if (k.indexOf("hint ") === 0) {
                 var label = k.substring(5).trim();
                 if (label) cfg.hintOverrides[label] = v;
@@ -240,6 +243,7 @@ var TemplateFactory = (function () {
         lines.push("  Known Facts Limit           " + cfg.knownFactsLimit);
         lines.push("  Fallback Type               " + cfg.fallbackType);
         lines.push("  Announce Help On First Use  " + cfg.announceHelpOnFirstUse);
+        lines.push("  Generate Names With AI      " + cfg.generateNamesWithAI);
         var hintKeys = Object.keys(cfg.hintOverrides);
         if (hintKeys.length) {
             lines.push("");
@@ -587,62 +591,95 @@ var TemplateFactory = (function () {
 
     /* ================= CARD CREATION ================= */
 
-    function createFromTemplate(type, name, storyCards, state, cfg) {
+    function createFromTemplate(type, name, storyCards, state, cfg, needAIName) {
         var t = resolveTemplate(type, storyCards, cfg);
         if (!t) return { ok: false, msg: "No template for type: " + type };
 
-        var rawEntry = "";
-        var keysText = "";
+        var rawTemplate = "";
+        var keyTemplate = "";
 
         if (t.card) {
-            rawEntry = cardEntry(t.card);
-            var lines = rawEntry.split("\n");
+            rawTemplate = cardEntry(t.card);
+            var lines = rawTemplate.split("\n");
             var keep = [];
             var foundKeys = false;
             lines.forEach(function (ln) {
                 var m = ln.match(/^Keys?\s*:\s*(.+)$/i);
-                if (m) { keysText = m[1]; foundKeys = true; }
+                if (m) { keyTemplate = m[1]; foundKeys = true; }
                 else keep.push(ln);
             });
-            if (!foundKeys) keysText = "{{name}}";
-            rawEntry = keep.join("\n");
+            if (!foundKeys) keyTemplate = "{{name}}";
+            rawTemplate = keep.join("\n");
         } else if (t.default) {
-            rawEntry = t.default.entry;
-            keysText = "{{name}}";
+            rawTemplate = t.default.entry;
+            keyTemplate = "{{name}}";
         }
 
         var typeLabel = titleCase(type);
-        rawEntry = substitute(rawEntry, name, typeLabel);
-        keysText = substitute(keysText, name, typeLabel);
 
-        var cardType = typeLabel;
+        /* ---- Fully-AI path: no name given, no card created here ---- */
+        if (needAIName) {
+            var bodyForFill = rawTemplate.replace(/\{\{\s*type\s*\}\}/gi, typeLabel);
+            var fields = extractPlaceholders(bodyForFill);
+
+            setPending(state, {
+                cardKey: null,
+                cardName: "",
+                originalName: "",
+                keysTemplate: keyTemplate,
+                rawTemplate: rawTemplate,
+                typeLabel: typeLabel,
+                needAIName: true,
+                type: type,
+                displayType: typeLabel,
+                rawEntry: bodyForFill,
+                fields: fields,
+                values: {},
+                attempts: 0
+            });
+
+            toast(state, "\uD83D\uDCDD Forging " + typeLabel + "\u2026", cfg);
+            return { ok: true, done: false };
+        }
+
+        /* ---- Named path: user supplied a name; create immediately ---- */
+        var body = rawTemplate
+            .replace(/\{\{\s*type\s*\}\}/gi, typeLabel)
+            .replace(/\{\{\s*name\s*\}\}/gi, name);
+        var keys = keyTemplate
+            .replace(/\{\{\s*name\s*\}\}/gi, name)
+            .replace(/\{\{\s*type\s*\}\}/gi, typeLabel);
 
         try {
-            var idx = addStoryCard(keysText, rawEntry, cardType);
+            var idx = addStoryCard(keys, body, typeLabel);
             if (idx === false) return { ok: false, msg: "A story card with those keys already exists." };
         } catch (e) {
             return { ok: false, msg: "Could not create the story card." };
         }
 
-        var fields = extractPlaceholders(rawEntry);
-
-        if (fields.length === 0) {
-            toast(state, "\uD83D\uDCDD Card created: " + name + " (" + cardType + ")", cfg);
+        var fields2 = extractPlaceholders(body);
+        if (fields2.length === 0) {
+            toast(state, "\uD83D\uDCDD Card created: " + name + " (" + typeLabel + ")", cfg);
             return { ok: true, done: true };
         }
 
         setPending(state, {
-            cardKey: keysText,
+            cardKey: keys,
             cardName: name,
+            originalName: name,
+            keysTemplate: keyTemplate,
+            rawTemplate: rawTemplate,
+            typeLabel: typeLabel,
+            needAIName: false,
             type: type,
-            displayType: cardType,
-            rawEntry: rawEntry,
-            fields: fields,
+            displayType: typeLabel,
+            rawEntry: body,
+            fields: fields2,
             values: {},
             attempts: 0
         });
 
-        toast(state, "\uD83D\uDCDD Forging " + cardType + ": " + name + "\u2026", cfg);
+        toast(state, "\uD83D\uDCDD Forging " + typeLabel + ": " + name + "\u2026", cfg);
         return { ok: true, done: false };
     }
 
@@ -762,8 +799,13 @@ var TemplateFactory = (function () {
             return { ok: false, msg: listTemplates(storyCards) };
         }
         var name = parts.slice(1).join(" ").trim();
-        if (!name) name = generateName(type, storyCards);
-        return createFromTemplate(type, name, storyCards, state, cfg);
+
+        /* Fully AI path: no name means the AI invents one. The pool is
+           no longer consulted here. */
+        if (!name) {
+            return createFromTemplate(type, "", storyCards, state, cfg, true);
+        }
+        return createFromTemplate(type, name, storyCards, state, cfg, false);
     }
     function handleTemplate(arg, storyCards, cfg) {
         if (!arg || normalize(arg) === "list") return listTemplates(storyCards);
@@ -871,16 +913,29 @@ var TemplateFactory = (function () {
 
             lines.push("The card you are writing is for:");
             lines.push("  Type: " + p.displayType);
-            lines.push("  Name: " + p.cardName);
+            if (p.needAIName) {
+                lines.push("  Name: (unknown \u2014 choose one and put it in \"New name\" below)");
+            } else {
+                lines.push("  Name: " + p.cardName);
+            }
             lines.push("");
-            lines.push("Write exactly these " + p.fields.length + " lines, in this order.");
+            var totalFields = p.fields.length + (p.needAIName ? 1 : 0);
+            lines.push("Write exactly these " + totalFields + " lines, in this order.");
             lines.push("No quotes, no markdown, no headings, no commentary.");
             lines.push("");
+            if (p.needAIName) {
+                lines.push("New name: <invent a name matching the story's tone, genre, and setting \u2014 2 to 4 words. Do NOT reuse \"" + p.cardName + "\">");
+            }
+            var forText = p.needAIName ? "for this new card" : ("for " + p.cardName);
             p.fields.forEach(function (f) {
-                lines.push(f.label + ": <" + fieldHint(f.label, p.type, cfg) + " \u2014 for " + p.cardName + ">");
+                lines.push(f.label + ": <" + fieldHint(f.label, p.type, cfg) + " \u2014 " + forText + ">");
             });
             lines.push("");
-            lines.push("Your reply must begin with the exact text \"" + p.fields[0].label + ":\"");
+            if (p.needAIName) {
+                lines.push("Your reply must begin with the exact text \"New name:\"");
+            } else {
+                lines.push("Your reply must begin with the exact text \"" + p.fields[0].label + ":\"");
+            }
             lines.push("and must end after the last field. Nothing else.");
             lines.push("==========================================================");
             return { text: text + "\n" + lines.join("\n"), stop: false };
@@ -900,41 +955,94 @@ var TemplateFactory = (function () {
         if (!p) return { text: text, stop: false };
 
         var parsed = parseFields(text, p);
+
+        /* ---- AI name extraction (bullet + markdown tolerant) ---- */
+        var aiName = null;
+        if (p.needAIName) {
+            var _lines = String(text || "").split("\n");
+            for (var _i = 0; _i < _lines.length; _i++) {
+                var _nl = _lines[_i]
+                    .replace(/^\s*[\s>*#\u2022\u25b8\-]+\s*/, "")
+                    .replace(/\*\*/g, "")
+                    .replace(/^["'\u201c\u201d\u2018\u2019]+/, "")
+                    .replace(/["'\u201c\u201d\u2018\u2019]+\s*$/, "")
+                    .replace(/\s+$/, "");
+                var _m = _nl.match(/^(?:New\s+name|Full\s+name|Name)\s*:\s*(.+)$/i);
+                if (!_m) continue;
+                var _c = clean(_m[1])
+                    .replace(/^["'\u201c\u201d\u2018\u2019]+/, "")
+                    .replace(/["'\u201c\u201d\u2018\u2019]+\s*$/, "")
+                    .replace(/\*\*/g, "")
+                    .replace(/\s+$/, "");
+                if (_c && _c.length < 80) { aiName = _c; break; }
+            }
+        }
+
         if (!p.values) p.values = {};
         Object.keys(parsed).forEach(function (k) { p.values[k] = parsed[k]; });
 
         var gotAll = p.fields.every(function (f) { return !!p.values[f.placeholder]; });
+        if (p.needAIName && !aiName) gotAll = false;
 
+        /* ---- Build the final entry, substituting name + values ---- */
+        function buildBody(finalName, values) {
+            return String(p.rawTemplate || "").replace(/\{\{([^}]+)\}\}/g, function (match, ph) {
+                var key = normPh(ph);
+                if (key === "name") return finalName;
+                if (key === "type") return p.typeLabel || p.displayType;
+                if (values[key]) return values[key];
+                return match;
+            });
+        }
+        function buildKey(finalName) {
+            return String(p.keysTemplate || "{{name}}")
+                .replace(/\{\{\s*name\s*\}\}/gi, finalName)
+                .replace(/\{\{\s*type\s*\}\}/gi, p.typeLabel || p.displayType);
+        }
+        function uniqueKey(candidate) {
+            if (!findCard(candidate, storyCards)) return candidate;
+            for (var i = 2; i < 100; i++) {
+                var c = candidate + " " + i;
+                if (!findCard(c, storyCards)) return c;
+            }
+            return candidate + " " + Math.floor(Date.now() % 100000);
+        }
+
+        /* ---- Success ---- */
         if (gotAll) {
-            var newEntry = buildEntry(p, p.values);
-            try {
-                var found = findCard(p.cardKey, storyCards);
-                if (found) updateStoryCard(found.index, p.cardKey, newEntry, p.displayType);
-            } catch (e) {}
-            toast(state, "\u2728 Card forged: " + p.cardName + " (" + p.displayType + ")", cfg);
+            var finalName = p.needAIName ? aiName : p.cardName;
+            var finalKey = uniqueKey(buildKey(finalName));
+            var finalBody = buildBody(finalName, p.values);
+
+            try { addStoryCard(finalKey, finalBody, p.displayType); } catch (e) {}
+
+            toast(state, "\u2728 Card forged: " + finalName + " (" + p.displayType + ")", cfg);
             clearPending(state);
             return { text: completionSentinel(cfg), stop: false };
         }
 
+        /* ---- Retry or fallback ---- */
         p.attempts = (p.attempts || 0) + 1;
         var maxAttempts = Math.max(1, number(cfg.maxAttempts, 3));
 
         if (p.attempts >= maxAttempts) {
-            if (Object.keys(p.values).length > 0) {
-                var partial = buildEntry(p, p.values);
-                try {
-                    var pf = findCard(p.cardKey, storyCards);
-                    if (pf) updateStoryCard(pf.index, p.cardKey, partial, p.displayType);
-                } catch (e) {}
+            /* Last-resort fallback: pool name if needed. */
+            var fallbackName = p.needAIName ? generateName(p.type, storyCards) : p.cardName;
+            var fbKey = uniqueKey(buildKey(fallbackName));
+            var fbBody = buildBody(fallbackName, p.values || {});
+            try { addStoryCard(fbKey, fbBody, p.displayType); } catch (e) {}
+
+            if (p.needAIName) {
+                toast(state, "\u26A0 Card forged with a fallback name: " + fallbackName + " \u2014 edit in STORY CARDS panel.", cfg);
+            } else {
+                toast(state, "\u26A0 Card partially filled: " + fallbackName + " \u2014 edit in STORY CARDS panel.", cfg);
             }
-            toast(state, "\u26A0 Card partially filled: " + p.cardName + " \u2014 edit in STORY CARDS panel.", cfg);
             clearPending(state);
             return { text: failureSentinel(cfg), stop: false };
         }
 
         setPending(state, p);
 
-        /* ---- B1: one-time help banner under the forging sentinel ---- */
         var withBanner = false;
         if (cfg.announceHelpOnFirstUse !== false && !helpBannerConsumed(state)) {
             withBanner = true;
