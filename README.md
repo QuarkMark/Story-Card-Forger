@@ -77,4 +77,4 @@ That's it. The first time you run a `!forge` command, the built-in templates and
 
 ---
 
-
+Inspired by LewdLeah's AutoCard
