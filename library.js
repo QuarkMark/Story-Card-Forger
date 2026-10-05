@@ -1,6 +1,6 @@
 /* =========================================================
    STORY CARD FORGER
-   Version 1.1
+   Version 1.3
 
    Commands:
      !forge <type> [name]      Forge a new story card
@@ -20,10 +20,9 @@
      known-facts extraction, fallback type, per-field hints,
      and the one-time !help banner.
 
-
-     1.1 Change: The name The pool is now dead code on the success path. 
-     It only fires when the AI genuinely refuses to cooperate. No mismatches possible, 
-     because the card is created once — with the final name — and never renamed.
+     1.1: Enabled Fully ai based generation on names instead of 
+     static name list.
+     1.2: FIxed Story card duplication when making a named story card
    ========================================================= */
 
 var TemplateFactory = (function () {
@@ -1013,13 +1012,25 @@ var TemplateFactory = (function () {
             return candidate + " " + Math.floor(Date.now() % 100000);
         }
 
+        /* ---- writeCard: update in place if a card already exists ---- */
+        function writeCard(entry, finalName) {
+            if (p.cardKey) {
+                var found = findCard(p.cardKey, storyCards);
+                if (found) {
+                    try { updateStoryCard(found.index, p.cardKey, entry, p.displayType); } catch (e) {}
+                    return p.cardKey;
+                }
+            }
+            var newKey = uniqueKey(buildKey(finalName));
+            try { addStoryCard(newKey, entry, p.displayType); } catch (e) {}
+            return newKey;
+        }
+
         /* ---- Success ---- */
         if (gotAll) {
             var finalName = p.needAIName ? aiName : p.cardName;
-            var finalKey = uniqueKey(buildKey(finalName));
             var finalBody = buildBody(finalName, p.values);
-
-            try { addStoryCard(finalKey, finalBody, p.displayType); } catch (e) {}
+            writeCard(finalBody, finalName);
 
             toast(state, "\u2728 Card forged: " + finalName + " (" + p.displayType + ")", cfg);
             clearPending(state);
@@ -1031,11 +1042,9 @@ var TemplateFactory = (function () {
         var maxAttempts = Math.max(1, number(cfg.maxAttempts, 3));
 
         if (p.attempts >= maxAttempts) {
-            /* Last-resort fallback: pool name if needed. */
             var fallbackName = p.needAIName ? generateName(p.type, storyCards) : p.cardName;
-            var fbKey = uniqueKey(buildKey(fallbackName));
             var fbBody = buildBody(fallbackName, p.values || {});
-            try { addStoryCard(fbKey, fbBody, p.displayType); } catch (e) {}
+            writeCard(fbBody, fallbackName);
 
             if (p.needAIName) {
                 toast(state, "\u26A0 Card forged with a fallback name: " + fallbackName + " \u2014 edit in STORY CARDS panel.", cfg);
