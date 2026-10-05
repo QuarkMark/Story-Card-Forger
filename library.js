@@ -1,6 +1,6 @@
 /* =========================================================
    STORY CARD FORGER
-   Version 1.0
+   Version 1.1
 
    Commands:
      !forge <type> [name]      Forge a new story card
@@ -19,6 +19,11 @@
      User-editable. Controls retries, toasts, sentinels,
      known-facts extraction, fallback type, per-field hints,
      and the one-time !help banner.
+
+
+     1.1 Change: The name The pool is now dead code on the success path. 
+     It only fires when the AI genuinely refuses to cooperate. No mismatches possible, 
+     because the card is created once — with the final name — and never renamed.
    ========================================================= */
 
 var TemplateFactory = (function () {
