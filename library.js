@@ -27,7 +27,7 @@
 
 var TemplateFactory = (function () {
 
-    var VERSION = "1.0";
+    var VERSION = "1.3";
     var TEMPLATE_PREFIX = "TEMPLATE_";
     var CONFIG_KEY = "STORY_CARD_FORGER_CONFIG";
     var SILENT_MARKER = ".";
