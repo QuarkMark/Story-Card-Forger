@@ -28,18 +28,20 @@ Built for [AI Dungeon](https://aidungeon.com/) scenarios.
 ## 📦 Installation
 
 1. Open your AI Dungeon scenario → **Scripts**.
-2. Paste each file into its matching tab:
+2. Copy each file into its matching tab. Click a link below, then click the **Raw** button at the top-right of the page to get plain text.
 
-   | File | Tab |
-   |---|---|
-   | `library.js` | **Library** |
-   | `input.js` | **Input** |
-   | `context.js` | **Context** |
-   | `output.js` | **Output** |
+   | File | Goes into tab | Open |
+   |---|---|---|
+   | `library.js` | **Library** | [open 📄](../../raw/main/library.js) |
+   | `input.js` | **Input** | [open 📄](../../raw/main/input.js) |
+   | `context.js` | **Context** | [open 📄](../../raw/main/context.js) |
+   | `output.js` | **Output** | [open 📄](../../raw/main/output.js) |
 
-3. Save and start a new game.
+3. Save the scenario and start a new game.
 
 That's it. The first time you run a `!forge` command, the built-in templates and config card are created automatically.
+
+> **Tip:** On the Raw view, right-click anywhere and choose **Save As**, or press `Ctrl+A` then `Ctrl+C`. Paste directly into the matching tab in AI Dungeon.
 
 ---
 
